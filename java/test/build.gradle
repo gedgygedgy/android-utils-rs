@@ -1,0 +1,44 @@
+plugins {
+    id 'com.android.library'
+    id 'org.mozilla.rust-android-gradle.rust-android'
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+android {
+    compileSdkVersion 30
+    ndkVersion '22.1.7171670'
+
+    defaultConfig {
+        minSdkVersion 23
+        targetSdkVersion 30
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+cargo {
+    module = 'src/main/rust'
+    libname = 'android_utils_test'
+    targets = ['linux-x86-64']
+}
+
+tasks.whenTaskAdded { task ->
+    if ((task.name == 'javaPreCompileDebugUnitTest' || task.name == 'javaPreCompileReleaseUnitTest')) {
+        task.dependsOn 'cargoBuild'
+    }
+}
+
+group = 'io.github.gedgygedgy.rust.android'
+
+dependencies {
+    implementation 'io.github.gedgygedgy.rust:jni-utils:0.1.0'
+    testImplementation 'junit:junit:4+'
+    testImplementation 'org.robolectric:robolectric:4.4'
+}

@@ -1,0 +1,69 @@
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:4.2.2'
+    }
+}
+
+plugins {
+    id 'com.android.library'
+    id 'maven-publish'
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+android {
+    compileSdkVersion 30
+
+    defaultConfig {
+        minSdkVersion 23
+        versionCode 1
+        versionName '0.7.2'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            pom {
+                name = 'Extra Utilities for Android in Rust'
+                description = 'This is the Java support library for android-utils.'
+                url = 'https://github.com/gedgygedgy/android-utils-rs'
+                licenses {
+                    license {
+                        name = '3-Clause BSD License'
+                        url = 'https://opensource.org/licenses/BSD-3-Clause'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'gedgygedgy'
+                        name = 'Gedgy Gedgy'
+                        email = 'gedgygedgy@protonmail.com'
+                        organization = 'Gedgy Gedgy'
+                        organizationUrl = 'https://github.com/gedgygedgy'
+                    }
+                }
+                scm {
+                    connection = 'scm:git:git://github.com/gedgygedgy/android-utils-rs.git'
+                    developerConnection = 'scm:git:ssh://github.com:gedgygedgy/android-utils-rs.git'
+                    url = 'https://github.com/gedgygedgy/android-utils-rs'
+                }
+            }
+        }
+    }
+}
+
+group = 'io.github.gedgygedgy.rust.android'
+version = '0.1.0-SNAPSHOT'

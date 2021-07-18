@@ -1,0 +1,18 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven {
+            url 'https://plugins.gradle.org/m2/'
+        }
+    }
+    plugins {
+        id 'com.android.library' version '4.2.2'
+        id 'org.mozilla.rust-android-gradle.rust-android' version '0.8.7'
+    }
+}
+
+rootProject.name = 'android-utils'
+
+include ':android-utils-test'
+project(':android-utils-test').projectDir = file('test')
