@@ -30,8 +30,13 @@ cargo {
 }
 
 tasks.whenTaskAdded { task ->
-    if ((task.name == 'javaPreCompileDebugUnitTest' || task.name == 'javaPreCompileReleaseUnitTest')) {
+    if (task.name == 'javaPreCompileDebugUnitTest' || task.name == 'javaPreCompileReleaseUnitTest') {
         task.dependsOn 'cargoBuild'
+    }
+
+    // Testing depends on the native library, which Gradle doesn't recognize as an input.
+    if (task.name == 'testDebugUnitTest' || task.name == 'testReleaseUnitTest') {
+        task.outputs.upToDateWhen { false }
     }
 }
 
