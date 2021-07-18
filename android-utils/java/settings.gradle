@@ -15,4 +15,4 @@ pluginManagement {
 rootProject.name = 'android-utils'
 
 include ':android-utils-test'
-project(':android-utils-test').projectDir = file('test')
+project(':android-utils-test').projectDir = file('../../test/java')

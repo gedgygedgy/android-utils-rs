@@ -24,7 +24,7 @@ android {
 }
 
 cargo {
-    module = 'src/main/rust'
+    module = '..'
     libname = 'android_utils_test'
     targets = ['linux-x86-64']
 }

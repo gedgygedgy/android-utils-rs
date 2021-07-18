@@ -4,9 +4,10 @@ edition = "2018"
 version = "0.1.0"
 
 [lib]
+path = "rust/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
 jni = "0.19.0"
 jni-utils = "0.1.0"
-android-utils = { path = "../../../../.." }
+android-utils = { path = "../android-utils" }
