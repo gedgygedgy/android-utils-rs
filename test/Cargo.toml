@@ -10,4 +10,5 @@ crate-type = ["cdylib"]
 [dependencies]
 jni = "0.19.0"
 jni-utils = "0.1.0"
+futures = "0.3.15"
 android-utils = { path = "../android-utils" }

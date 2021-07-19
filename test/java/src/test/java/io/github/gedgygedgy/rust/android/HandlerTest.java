@@ -13,4 +13,16 @@ public class HandlerTest {
 
     @Test
     public native void testPost();
+
+    @Test
+    public native void testSpawn();
+
+    @Test
+    public native void testSpawnThread();
+
+    @Test
+    public native void testSpawnLocal();
+
+    @Test
+    public native void testSpawnLocalThread();
 }
