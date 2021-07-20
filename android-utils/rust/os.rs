@@ -9,7 +9,10 @@ use once_cell::sync::OnceCell;
 use std::{
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        mpsc::{channel, Sender},
+        Arc, Mutex,
+    },
     task::{Context, Poll, Wake, Waker},
 };
 
@@ -81,26 +84,127 @@ impl<'a: 'b, 'b> ::std::ops::Deref for JHandler<'a, 'b> {
     }
 }
 
+static FALLBACK_SENDER: OnceCell<Mutex<Option<Sender<Arc<HandlerWaker>>>>> = OnceCell::new();
+
+fn init_fallback_thread<'a: 'b, 'b>(env: &'b JNIEnv<'a>) {
+    FALLBACK_SENDER.get_or_init(|| {
+        let (sender, receiver) = channel::<Arc<HandlerWaker>>();
+
+        let thread_class = env.auto_local(env.find_class("java/lang/Thread").unwrap());
+        let thread_ctor = env
+            .get_method_id(
+                &thread_class,
+                "<init>",
+                "(Ljava/lang/Runnable;Ljava/lang/String;)V",
+            )
+            .unwrap();
+
+        let shutdown_runnable = env.auto_local(
+            jni_utils::ops::fn_once_runnable(env, |_env, _obj| {
+                let mut guard = FALLBACK_SENDER.get().unwrap().lock().unwrap();
+                guard.take();
+            })
+            .unwrap(),
+        );
+        let shutdown_name = env.auto_local(env.new_string("wake-shutdown").unwrap());
+        let shutdown_thread = env.auto_local(
+            env.new_object_unchecked(
+                &thread_class,
+                thread_ctor,
+                &[(&shutdown_runnable).into(), (&shutdown_name).into()],
+            )
+            .unwrap(),
+        );
+        let runtime = env.auto_local(
+            env.call_static_method(
+                "java/lang/Runtime",
+                "getRuntime",
+                "()Ljava/lang/Runtime;",
+                &[],
+            )
+            .unwrap()
+            .l()
+            .unwrap(),
+        );
+        env.call_method(
+            &runtime,
+            "addShutdownHook",
+            "(Ljava/lang/Thread;)V",
+            &[(&shutdown_thread).into()],
+        )
+        .unwrap();
+
+        let fallback_runnable = env.auto_local(
+            jni_utils::ops::fn_once_runnable(env, move |_env, _obj| {
+                for waker in receiver {
+                    waker.wake_direct().unwrap();
+                }
+            })
+            .unwrap(),
+        );
+        let fallback_name = env.auto_local(env.new_string("wake-fallback").unwrap());
+        let fallback_thread = env.auto_local(
+            env.new_object_unchecked(
+                &thread_class,
+                thread_ctor,
+                &[(&fallback_runnable).into(), (&fallback_name).into()],
+            )
+            .unwrap(),
+        );
+        env.call_method(&fallback_thread, "setDaemon", "(Z)V", &[true.into()])
+            .unwrap();
+        env.call_method(&fallback_thread, "start", "()V", &[])
+            .unwrap();
+
+        Mutex::new(Some(sender))
+    });
+}
+
 struct HandlerWaker {
     vm: JavaVM,
     handler: GlobalRef,
     runnable: GlobalRef,
 }
 
+impl HandlerWaker {
+    fn wake_direct(&self) -> Result<()> {
+        let env = self.vm.get_env()?;
+        let handler = JHandler::from_env(&env, self.handler.as_obj())?;
+        handler.post(self.runnable.as_obj())?;
+        Ok(())
+    }
+
+    fn wake_fallback(self: Arc<Self>) {
+        let guard = FALLBACK_SENDER.get().unwrap().lock().unwrap();
+        guard.as_ref().unwrap().send(self).unwrap();
+    }
+}
+
 impl Wake for HandlerWaker {
     fn wake(self: Arc<Self>) {
-        self.wake_by_ref()
+        if self.wake_direct().is_err() {
+            self.wake_fallback();
+        }
     }
 
     fn wake_by_ref(self: &Arc<Self>) {
-        let env = self.vm.get_env().unwrap();
-        let handler = JHandler::from_env(&env, self.handler.as_obj()).unwrap();
-        handler.post(self.runnable.as_obj()).unwrap();
+        if self.wake_direct().is_err() {
+            self.clone().wake_fallback();
+        }
     }
 }
 
 /// Object that implements [`Spawn`] and [`LocalSpawn`] for [`JHandler`].
 /// Obtained by calling [`JHandler::spawner`].
+///
+/// The [`Waker`] produced by this object can be woken from a Java thread or
+/// a native, non-Java-attached thread. If it's woken from a Java thread, the
+/// thread will directly post the task to the `Handler`. If it's woken from a
+/// native, non-Java-attached thread, the [`Waker`] will send itself to a
+/// fallback thread that is Java-attached and whose sole purpose is to post
+/// async tasks to the `Handler` on behalf of native threads. This fallback
+/// thread will be started upon spawning an async task from a [`JHandlerSpawn`]
+/// for the first time, and will be shut down when the JVM shuts down.
 pub struct JHandlerSpawn<'a: 'b, 'b>(JHandler<'a, 'b>);
 
 impl<'a: 'b, 'b> JHandlerSpawn<'a, 'b> {
@@ -133,6 +237,7 @@ impl<'a: 'b, 'b> JHandlerSpawn<'a, 'b> {
     }
 
     fn post_spawn(&self, runnable: JObject<'a>) -> std::result::Result<(), SpawnError> {
+        init_fallback_thread(self.0.env);
         if self.0.post(runnable).unwrap() {
             Ok(())
         } else {

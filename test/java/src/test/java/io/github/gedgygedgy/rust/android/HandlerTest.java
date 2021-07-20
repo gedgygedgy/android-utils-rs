@@ -18,6 +18,12 @@ public class HandlerTest {
     public native void testSpawn();
 
     @Test
+    public native void testSpawnNativeThreadWake();
+
+    @Test
+    public native void testSpawnAsyncSleep();
+
+    @Test
     public native void testSpawnThread();
 
     @Test
