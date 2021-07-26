@@ -31,4 +31,7 @@ public class HandlerTest {
 
     @Test
     public native void testSpawnLocalThread();
+
+    @Test
+    public native void testRustHandlerCallback();
 }

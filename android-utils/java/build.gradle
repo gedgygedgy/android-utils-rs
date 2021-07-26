@@ -67,3 +67,7 @@ publishing {
 
 group = 'io.github.gedgygedgy.rust.android'
 version = '0.1.0-SNAPSHOT'
+
+dependencies {
+    implementation 'io.github.gedgygedgy.rust:jni-utils:0.1.0'
+}

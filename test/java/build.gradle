@@ -44,6 +44,8 @@ group = 'io.github.gedgygedgy.rust.android'
 
 dependencies {
     implementation 'io.github.gedgygedgy.rust:jni-utils:0.1.0'
+    implementation rootProject
     testImplementation 'junit:junit:4+'
     testImplementation 'org.robolectric:robolectric:4.4'
+    testImplementation 'androidx.test:core:1.0.0'
 }

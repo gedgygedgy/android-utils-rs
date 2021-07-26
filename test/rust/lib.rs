@@ -1,10 +1,16 @@
-use android_utils::os::JHandler;
+use android_utils::os::{async_handler_callback, JHandler};
+use futures::StreamExt;
 use jni::{objects::JObject, sys::jint, JNIEnv, JavaVM};
 use jni_utils::{
     exceptions::{throw_unwind, try_block},
     ops::fn_once_runnable,
+    stream::JSendStream,
 };
-use std::ffi::c_void;
+use std::{
+    convert::TryFrom,
+    ffi::c_void,
+    sync::{Arc, Mutex},
+};
 
 #[no_mangle]
 pub extern "C" fn JNI_OnLoad(vm: JavaVM, _res: *const c_void) -> jint {
@@ -65,8 +71,6 @@ pub extern "C" fn Java_io_github_gedgygedgy_rust_android_HandlerTest_testPost(
     _obj: JObject,
 ) {
     let _ = throw_unwind(&env, || {
-        use std::sync::{Arc, Mutex};
-
         let (shadow_looper, handler) = shadow_looper_and_handler(&env);
 
         let arc = Arc::new(Mutex::new(false));
@@ -99,7 +103,6 @@ pub extern "C" fn Java_io_github_gedgygedgy_rust_android_HandlerTest_testSpawn(
 ) {
     let _ = throw_unwind(&env, || {
         use futures::{channel::oneshot::channel, task::SpawnExt};
-        use std::sync::{Arc, Mutex};
 
         let (shadow_looper, handler) = shadow_looper_and_handler(&env);
 
@@ -193,10 +196,7 @@ pub extern "C" fn Java_io_github_gedgygedgy_rust_android_HandlerTest_testSpawnAs
 ) {
     let _ = throw_unwind(&env, || {
         use futures::task::SpawnExt;
-        use std::{
-            sync::{Arc, Mutex},
-            time::Duration,
-        };
+        use std::time::Duration;
 
         let (shadow_looper, handler) = shadow_looper_and_handler(&env);
 
@@ -292,10 +292,7 @@ pub extern "C" fn Java_io_github_gedgygedgy_rust_android_HandlerTest_testSpawnNa
 ) {
     let _ = throw_unwind(&env, || {
         use futures::{channel::oneshot::channel, task::SpawnExt};
-        use std::{
-            sync::{Arc, Mutex},
-            time::Duration,
-        };
+        use std::time::Duration;
 
         let (shadow_looper, handler) = shadow_looper_and_handler(&env);
 
@@ -557,5 +554,68 @@ pub extern "C" fn Java_io_github_gedgygedgy_rust_android_HandlerTest_testSpawnLo
         )
         .result();
         assert_eq!(result.unwrap(), true);
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn Java_io_github_gedgygedgy_rust_android_HandlerTest_testRustHandlerCallback(
+    env: JNIEnv,
+    _obj: JObject,
+) {
+    let _ = throw_unwind(&env, || {
+        use futures::task::SpawnExt;
+
+        let handler_data = Arc::new(Mutex::new(None));
+
+        let (shadow_looper, handler) = shadow_looper_and_handler(&env);
+
+        let (callback, stream) = async_handler_callback(&env).unwrap();
+        let mut stream = JSendStream::try_from(stream).unwrap();
+
+        let handler_data_clone = handler_data.clone();
+        let task = async move {
+            let msg = stream.next().await.unwrap().unwrap();
+            let mut guard = handler_data_clone.lock().unwrap();
+            *guard = Some(msg);
+        };
+
+        handler.spawner().spawn(task).unwrap();
+        env.call_method(shadow_looper, "runOneTask", "()V", &[])
+            .unwrap();
+        {
+            let guard = handler_data.lock().unwrap();
+            assert!(guard.is_none());
+        }
+
+        let message = env
+            .call_static_method(
+                "android/os/Message",
+                "obtain",
+                "()Landroid/os/Message;",
+                &[],
+            )
+            .unwrap()
+            .l()
+            .unwrap();
+        let result = env
+            .call_method(
+                callback,
+                "handleMessage",
+                "(Landroid/os/Message;)Z",
+                &[message.into()],
+            )
+            .unwrap()
+            .z()
+            .unwrap();
+        assert_eq!(result, false);
+
+        env.call_method(shadow_looper, "runOneTask", "()V", &[])
+            .unwrap();
+        {
+            let guard = handler_data.lock().unwrap();
+            assert!(env
+                .is_same_object(message, guard.as_ref().unwrap().as_obj())
+                .unwrap());
+        }
     });
 }

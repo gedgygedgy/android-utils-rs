@@ -5,6 +5,7 @@ use jni::{
     signature::{JavaType, Primitive},
     JNIEnv, JavaVM,
 };
+use jni_utils::stream::JStream;
 use once_cell::sync::OnceCell;
 use std::{
     future::Future,
@@ -276,4 +277,26 @@ impl<'a: 'b, 'b> LocalSpawn for JHandlerSpawn<'a, 'b> {
             jni_utils::ops::fn_mut_runnable_local(self.0.env, self.wrap_future(fut)).unwrap();
         self.post_spawn(runnable)
     }
+}
+
+/// Create an `android.os.Handler.Callback` and an accompanying `Stream` which
+/// can be used to asynchronously get messages as the callback is called.
+pub fn async_handler_callback<'a: 'b, 'b>(
+    env: &'b JNIEnv<'a>,
+) -> Result<(JObject<'a>, JStream<'a, 'b>)> {
+    let callback = env.new_object(
+        "io/github/gedgygedgy/rust/android/os/RustHandlerCallback",
+        "()V",
+        &[],
+    )?;
+    let stream = env
+        .call_method(
+            callback,
+            "getMessageStream",
+            "()Lio/github/gedgygedgy/rust/stream/Stream;",
+            &[],
+        )?
+        .l()?;
+    let stream = JStream::from_env(env, stream)?;
+    Ok((callback, stream))
 }
