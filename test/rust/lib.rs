@@ -1,4 +1,7 @@
-use android_utils::os::{async_handler_callback, JHandler};
+use android_utils::{
+    os::{async_handler_callback, JHandler},
+    service::async_service_connection,
+};
 use futures::StreamExt;
 use jni::{objects::JObject, sys::jint, JNIEnv, JavaVM};
 use jni_utils::{
@@ -616,6 +619,141 @@ pub extern "C" fn Java_io_github_gedgygedgy_rust_android_HandlerTest_testRustHan
             assert!(env
                 .is_same_object(message, guard.as_ref().unwrap().as_obj())
                 .unwrap());
+        }
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn Java_io_github_gedgygedgy_rust_android_ServiceTest_testRustServiceConnection(
+    env: JNIEnv,
+    _obj: JObject,
+) {
+    let _ = throw_unwind(&env, || {
+        use android_utils::service::ServiceConnectionEvent;
+        use futures::task::SpawnExt;
+
+        let (conn, mut stream) = async_service_connection(&env).unwrap();
+
+        let (shadow_looper, handler) = shadow_looper_and_handler(&env);
+
+        let pkg = env.new_string("io.github.gedgygedgy.rust.android").unwrap();
+        let cls = env
+            .new_string("io.github.gedgygedgy.rust.android.ServiceTest$TestService")
+            .unwrap();
+        let component_name = env
+            .new_object(
+                "android/content/ComponentName",
+                "(Ljava/lang/String;Ljava/lang/String;)V",
+                &[pkg.into(), cls.into()],
+            )
+            .unwrap();
+        let component_name_ref = env.new_global_ref(component_name).unwrap();
+
+        let messenger = env
+            .new_object(
+                "android/os/Messenger",
+                "(Landroid/os/Handler;)V",
+                &[handler.clone().into()],
+            )
+            .unwrap();
+        let service = env
+            .call_method(messenger, "getBinder", "()Landroid/os/IBinder;", &[])
+            .unwrap()
+            .l()
+            .unwrap();
+        let service_ref = env.new_global_ref(service).unwrap();
+
+        let vm = env.get_java_vm().unwrap();
+        let finished = Arc::new(Mutex::new(false));
+        let finished_clone = finished.clone();
+        let task = async move {
+            let item = stream.next().await.unwrap().unwrap();
+            if let ServiceConnectionEvent::BindingDied { component_name } = item {
+                let env = vm.get_env().unwrap();
+                assert!(env
+                    .is_same_object(component_name.as_obj(), component_name_ref.as_obj())
+                    .unwrap());
+            } else {
+                panic!("Expected BindingDied");
+            }
+
+            let item = stream.next().await.unwrap().unwrap();
+            if let ServiceConnectionEvent::NullBinding { component_name } = item {
+                let env = vm.get_env().unwrap();
+                assert!(env
+                    .is_same_object(component_name.as_obj(), component_name_ref.as_obj())
+                    .unwrap());
+            } else {
+                panic!("Expected NullBinding");
+            }
+
+            let item = stream.next().await.unwrap().unwrap();
+            if let ServiceConnectionEvent::ServiceConnected {
+                component_name,
+                service,
+            } = item
+            {
+                let env = vm.get_env().unwrap();
+                assert!(env
+                    .is_same_object(component_name.as_obj(), component_name_ref.as_obj())
+                    .unwrap());
+                assert!(env
+                    .is_same_object(service.as_obj(), service_ref.as_obj())
+                    .unwrap());
+            } else {
+                panic!("Expected ServiceConnected");
+            }
+
+            let item = stream.next().await.unwrap().unwrap();
+            if let ServiceConnectionEvent::ServiceDisconnected { component_name } = item {
+                let env = vm.get_env().unwrap();
+                assert!(env
+                    .is_same_object(component_name.as_obj(), component_name_ref.as_obj())
+                    .unwrap());
+            } else {
+                panic!("Expected ServiceDisconnected");
+            }
+
+            let mut guard = finished_clone.lock().unwrap();
+            *guard = true;
+        };
+
+        handler.spawner().spawn(task).unwrap();
+
+        env.call_method(
+            conn,
+            "onBindingDied",
+            "(Landroid/content/ComponentName;)V",
+            &[component_name.into()],
+        )
+        .unwrap();
+        env.call_method(
+            conn,
+            "onNullBinding",
+            "(Landroid/content/ComponentName;)V",
+            &[component_name.into()],
+        )
+        .unwrap();
+        env.call_method(
+            conn,
+            "onServiceConnected",
+            "(Landroid/content/ComponentName;Landroid/os/IBinder;)V",
+            &[component_name.into(), service.into()],
+        )
+        .unwrap();
+        env.call_method(
+            conn,
+            "onServiceDisconnected",
+            "(Landroid/content/ComponentName;)V",
+            &[component_name.into()],
+        )
+        .unwrap();
+
+        env.call_method(shadow_looper, "runOneTask", "()V", &[])
+            .unwrap();
+        {
+            let guard = finished.lock().unwrap();
+            assert!(*guard);
         }
     });
 }
