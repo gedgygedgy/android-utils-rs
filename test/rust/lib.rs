@@ -1,9 +1,13 @@
 use android_utils::{
     os::{async_handler_callback, JHandler},
-    service::async_service_connection,
+    service::{async_service_connection, register_service, RustService, ServiceConnectionEvent},
 };
 use futures::StreamExt;
-use jni::{objects::JObject, sys::jint, JNIEnv, JavaVM};
+use jni::{
+    objects::{GlobalRef, JObject},
+    sys::jint,
+    JNIEnv, JavaVM,
+};
 use jni_utils::{
     exceptions::{throw_unwind, try_block},
     ops::fn_once_runnable,
@@ -629,7 +633,6 @@ pub extern "C" fn Java_io_github_gedgygedgy_rust_android_ServiceTest_testRustSer
     _obj: JObject,
 ) {
     let _ = throw_unwind(&env, || {
-        use android_utils::service::ServiceConnectionEvent;
         use futures::task::SpawnExt;
 
         let (conn, mut stream) = async_service_connection(&env).unwrap();
@@ -754,6 +757,251 @@ pub extern "C" fn Java_io_github_gedgygedgy_rust_android_ServiceTest_testRustSer
         {
             let guard = finished.lock().unwrap();
             assert!(*guard);
+        }
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn Java_io_github_gedgygedgy_rust_android_ServiceTest_testRustService(
+    env: JNIEnv,
+    _obj: JObject,
+) {
+    let _ = throw_unwind(&env, || {
+        struct TestServiceData {
+            created: bool,
+            binder: GlobalRef,
+            intent: Option<GlobalRef>,
+            rebound: bool,
+            start_flags: Option<jint>,
+            start_id: Option<jint>,
+        }
+
+        struct TestService(Arc<Mutex<TestServiceData>>);
+
+        impl Drop for TestService {
+            fn drop(&mut self) {
+                let mut guard = self.0.lock().unwrap();
+                guard.created = false;
+            }
+        }
+
+        impl RustService for TestService {
+            fn on_bind<'a: 'b, 'b>(&self, env: &'b JNIEnv<'a>, intent: JObject<'a>) -> JObject<'a> {
+                let mut guard = self.0.lock().unwrap();
+                guard.intent = Some(env.new_global_ref(intent).unwrap());
+                guard.binder.as_obj().into_inner().into()
+            }
+
+            fn on_unbind<'a: 'b, 'b>(&self, _env: &'b JNIEnv<'a>, _intent: JObject<'a>) -> bool {
+                let mut guard = self.0.lock().unwrap();
+                guard.intent = None;
+                true
+            }
+
+            fn on_rebind<'a: 'b, 'b>(&self, env: &'b JNIEnv<'a>, intent: JObject<'a>) {
+                let mut guard = self.0.lock().unwrap();
+                guard.intent = Some(env.new_global_ref(intent).unwrap());
+                guard.rebound = true;
+            }
+
+            fn on_start_command<'a: 'b, 'b>(
+                &self,
+                _env: &'b JNIEnv<'a>,
+                _intent: JObject<'a>,
+                flags: jint,
+                start_id: jint,
+            ) -> jint {
+                let mut guard = self.0.lock().unwrap();
+                guard.start_id = Some(start_id);
+                guard.start_flags = Some(flags);
+                android_utils::service::START_STICKY
+            }
+        }
+
+        let (_shadow_looper, handler) = shadow_looper_and_handler(&env);
+        let messenger = env
+            .new_object(
+                "android/os/Messenger",
+                "(Landroid/os/Handler;)V",
+                &[handler.into()],
+            )
+            .unwrap();
+        let binder = env
+            .call_method(messenger, "getBinder", "()Landroid/os/IBinder;", &[])
+            .unwrap()
+            .l()
+            .unwrap();
+        let binder_ref = env.new_global_ref(binder).unwrap();
+
+        let data = Arc::new(Mutex::new(TestServiceData {
+            created: false,
+            binder: binder_ref.clone(),
+            intent: None,
+            rebound: false,
+            start_flags: None,
+            start_id: None,
+        }));
+        let data_clone = data.clone();
+
+        let factory = move |_env: &JNIEnv, _obj: JObject| {
+            {
+                let mut guard = data_clone.lock().unwrap();
+                guard.created = true;
+            }
+            TestService(data_clone.clone())
+        };
+
+        let class = env
+            .find_class("io/github/gedgygedgy/rust/android/ServiceTest$TestRustService")
+            .unwrap();
+        register_service(&env, class, factory).unwrap();
+
+        {
+            let guard = data.lock().unwrap();
+            assert_eq!(guard.created, false);
+            assert!(guard.intent.is_none());
+        }
+
+        let context = env
+            .call_static_method(
+                "androidx/test/core/app/ApplicationProvider",
+                "getApplicationContext",
+                "()Landroid/content/Context;",
+                &[],
+            )
+            .unwrap()
+            .l()
+            .unwrap();
+        let class = env
+            .find_class("io/github/gedgygedgy/rust/android/ServiceTest$TestRustService")
+            .unwrap();
+        let intent = env
+            .new_object(
+                "android/content/Intent",
+                "(Landroid/content/Context;Ljava/lang/Class;)V",
+                &[context.into(), class.into()],
+            )
+            .unwrap();
+
+        let service = env.new_object(class, "()V", &[]).unwrap();
+
+        let service_controller = env.call_static_method(
+            "org/robolectric/android/controller/ServiceController",
+            "of",
+            "(Landroid/app/Service;Landroid/content/Intent;)Lorg/robolectric/android/controller/ServiceController;",
+            &[service.into(), intent.into()],
+        )
+           .unwrap().l().unwrap();
+        {
+            let guard = data.lock().unwrap();
+            assert_eq!(guard.created, false);
+            assert!(guard.intent.is_none());
+        }
+
+        env.call_method(
+            service_controller,
+            "create",
+            "()Lorg/robolectric/android/controller/ServiceController;",
+            &[],
+        )
+        .unwrap();
+        {
+            let guard = data.lock().unwrap();
+            assert_eq!(guard.created, true);
+            assert!(guard.intent.is_none());
+            assert!(guard.start_id.is_none());
+        }
+
+        env.call_method(
+            service_controller,
+            "bind",
+            "()Lorg/robolectric/android/controller/ServiceController;",
+            &[],
+        )
+        .unwrap();
+        {
+            let guard = data.lock().unwrap();
+            assert_eq!(guard.created, true);
+            assert!(env
+                .is_same_object(guard.intent.as_ref().unwrap(), intent)
+                .unwrap());
+            assert_eq!(guard.rebound, false);
+            assert!(guard.start_id.is_none());
+        }
+
+        env.call_method(
+            service_controller,
+            "unbind",
+            "()Lorg/robolectric/android/controller/ServiceController;",
+            &[],
+        )
+        .unwrap();
+        {
+            let guard = data.lock().unwrap();
+            assert_eq!(guard.created, true);
+            assert!(guard.intent.is_none());
+            assert_eq!(guard.rebound, false);
+            assert!(guard.start_id.is_none());
+        }
+
+        env.call_method(
+            service_controller,
+            "rebind",
+            "()Lorg/robolectric/android/controller/ServiceController;",
+            &[],
+        )
+        .unwrap();
+        {
+            let guard = data.lock().unwrap();
+            assert_eq!(guard.created, true);
+            assert!(env
+                .is_same_object(guard.intent.as_ref().unwrap(), intent)
+                .unwrap());
+            assert_eq!(guard.rebound, true);
+            assert!(guard.start_id.is_none());
+        }
+
+        env.call_method(
+            service_controller,
+            "unbind",
+            "()Lorg/robolectric/android/controller/ServiceController;",
+            &[],
+        )
+        .unwrap();
+        {
+            let guard = data.lock().unwrap();
+            assert_eq!(guard.created, true);
+            assert!(guard.intent.is_none());
+            assert_eq!(guard.rebound, true);
+            assert!(guard.start_id.is_none());
+        }
+
+        env.call_method(
+            service_controller,
+            "startCommand",
+            "(II)Lorg/robolectric/android/controller/ServiceController;",
+            &[android_utils::service::START_FLAG_RETRY.into(), 42.into()],
+        )
+        .unwrap();
+        {
+            let guard = data.lock().unwrap();
+            assert_eq!(guard.start_id.unwrap(), 42);
+            assert_eq!(
+                guard.start_flags.unwrap(),
+                android_utils::service::START_FLAG_RETRY
+            );
+        }
+
+        env.call_method(
+            service_controller,
+            "destroy",
+            "()Lorg/robolectric/android/controller/ServiceController;",
+            &[],
+        )
+        .unwrap();
+        {
+            let guard = data.lock().unwrap();
+            assert_eq!(guard.created, false);
         }
     });
 }
